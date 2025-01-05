@@ -1,4 +1,3 @@
-
 #!/bin/bash
 
 # AWS EBS Compliance Automation Script
