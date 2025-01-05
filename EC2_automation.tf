@@ -1,6 +1,8 @@
 #!/bin/bash
 function Control1
 {
+ec2-control1.tf
+
 
 }
 function Control2
