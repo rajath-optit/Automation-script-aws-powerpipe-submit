@@ -22,6 +22,150 @@ warning() {
     echo -e "${YELLOW}[WARNING]${NC} $1"
 }
 
+# Enhanced error handling function
+handle_error() {
+    local error_message=$1
+    local error_code=$2
+    echo -e "${RED}[ERROR]${NC} $error_message"
+    exit $error_code
+}
+
+# Retry command with exponential backoff
+retry_command() {
+    local command="$1"
+    local max_retries=5
+    local attempt=1
+    local delay=5 # initial delay in seconds
+
+    while [ $attempt -le $max_retries ]; do
+        echo -e "${GREEN}[INFO]${NC} Attempt $attempt: Running command '$command'"
+        
+        # Run the command
+        eval "$command"
+
+        # If the command was successful (exit code 0), break the loop
+        if [ $? -eq 0 ]; then
+            echo -e "${GREEN}[INFO]${NC} Command '$command' succeeded on attempt $attempt."
+            return 0
+        else
+            # If the command failed, increment the attempt and apply delay
+            echo -e "${YELLOW}[WARNING]${NC} Command '$command' failed. Retrying in $delay seconds..."
+            sleep $delay
+            ((attempt++))
+            delay=$((delay * 2))  # Exponential backoff
+        fi
+    done
+
+    # If we reached the max retries without success, print an error
+    handle_error "Command '$command' failed after $max_retries attempts" 2
+}
+
+# Function to audit volumes in parallel
+audit_volumes_parallel() {
+    local volume_ids=($1)
+
+    # Run `audit_volume` for each volume concurrently using parallel
+    echo "${volume_ids[@]}" | tr ' ' '\n' | parallel -j 4 "audit_volume {}"
+}
+
+# Function to audit a single volume
+audit_volume() {
+    local volume_id=$1
+    log "Auditing Volume: $volume_id"
+    # Retry command logic for fetching volume information
+    retry_command "aws ec2 describe-volumes --volume-ids '$volume_id' --query 'Volumes[0].Encrypted'"
+    
+    # Add other volume checks...
+}
+
+audit_all_volumes() {
+    log "Starting audit for all EBS volumes in the region"
+
+    # Get all volume IDs in the current region
+    local volume_ids=$(aws ec2 describe-volumes --query 'Volumes[*].VolumeId' --output text)
+    local compliance_report=""
+
+    # Loop through each volume and apply controls
+    for volume_id in $volume_ids; do
+        log "Auditing Volume: $volume_id"
+
+        # Collect individual volume compliance results
+        compliance_report+="\n[Compliance Report for Volume: $volume_id]\n"
+
+        # Check Delete on Termination
+        local delete_on_termination=$(aws ec2 describe-volumes --volume-ids "$volume_id" --query 'Volumes[0].Attachments[0].DeleteOnTermination' --output text 2>/dev/null)
+        if [ "$delete_on_termination" == "true" ]; then
+            compliance_report+="Delete on Termination: COMPLIANT\n"
+        else
+            compliance_report+="Delete on Termination: NON-COMPLIANT\n"
+        fi
+
+        # Check Encryption
+        local encryption_state=$(aws ec2 describe-volumes --volume-ids "$volume_id" --query 'Volumes[0].Encrypted' --output text)
+        if [ "$encryption_state" == "true" ]; then
+            compliance_report+="Encryption: COMPLIANT\n"
+        else
+            compliance_report+="Encryption: NON-COMPLIANT\n"
+        fi
+
+        # Check Backup Plan
+        local backup_state=$(aws backup list-protected-resources --query "ResourceArnList[?contains(@, '$volume_id')]" --output text)
+        if [ -n "$backup_state" ]; then
+            compliance_report+="Backup Plan: COMPLIANT\n"
+        else
+            compliance_report+="Backup Plan: NON-COMPLIANT\n"
+        fi
+
+        # Check Snapshots
+        local snapshot_count=$(aws ec2 describe-snapshots --filters "Name=volume-id,Values=$volume_id" --query 'Snapshots' --output text | wc -l)
+        if [ "$snapshot_count" -gt 0 ]; then
+            compliance_report+="Snapshots Exist: COMPLIANT\n"
+        else
+            compliance_report+="Snapshots Exist: NON-COMPLIANT\n"
+        fi
+
+        # Check Attachment to EC2 Instance
+        local attachment_state=$(aws ec2 describe-volumes --volume-ids "$volume_id" --query 'Volumes[0].Attachments[0].State' --output text)
+        if [ "$attachment_state" == "attached" ]; then
+            compliance_report+="Attached to Instance: COMPLIANT\n"
+        else
+            compliance_report+="Attached to Instance: NON-COMPLIANT\n"
+        fi
+    done
+
+    # Print the consolidated compliance report
+    echo -e "${GREEN}[CONSOLIDATED COMPLIANCE REPORT FOR ALL VOLUMES]${NC}"
+    echo -e "$compliance_report"
+}
+
+validate_orphaned_snapshots() {
+    log "Validating orphaned snapshots"
+
+    # Get all snapshots and check if their volume still exists
+    local orphaned_snapshots=""
+    local snapshots=$(aws ec2 describe-snapshots --owner-ids self --query 'Snapshots[*].{ID:SnapshotId,VolumeId:VolumeId}' --output json)
+
+    # Loop through snapshots and check for associated volume
+    echo "$snapshots" | jq -c '.[]' | while read snapshot; do
+        local snapshot_id=$(echo "$snapshot" | jq -r '.ID')
+        local volume_id=$(echo "$snapshot" | jq -r '.VolumeId')
+
+        # Check if volume exists
+        if ! aws ec2 describe-volumes --volume-ids "$volume_id" >/dev/null 2>&1; then
+            orphaned_snapshots+="$snapshot_id\n"
+        fi
+    done
+
+    if [ -n "$orphaned_snapshots" ]; then
+        log "Orphaned snapshots found:"
+        echo -e "$orphaned_snapshots"
+    else
+        log "No orphaned snapshots found"
+    fi
+}
+
+
+
 # EBS Control Functions
 ebs_control1() {
     local volume_id=$1
@@ -216,20 +360,29 @@ main() {
     echo "AWS EBS Compliance Automation Tool"
     echo "======================================"
     
-    echo "Select control to run:"
-    echo "1) Attached EBS volumes should have delete on termination enabled"
-    echo "2) Attached EBS volumes should have encryption enabled"
-    echo "3) EBS snapshots should be encrypted"
-    echo "4) EBS snapshots should not be publicly restorable"
-    echo "5) EBS encryption by default should be enabled"
-    echo "6) EBS volumes should be in a backup plan"
-    echo "7) EBS volume snapshots should exist"
-    echo "8) Ensure EBS volumes are attached to EC2 instances for proper usage and cost management."
-    echo "9) Ensure EBS volumes are encrypted at rest to protect data confidentiality."
-    echo "10) Ensure EBS volumes are part of a valid and automated backup plan."
-    echo "11) Ensure volume is attached to an EC2 instance"
-    echo "12) Ensure volume encryption at rest is enabled"
-    echo "13) Ensure snapshots are attached (via volume)"
+        echo "Select action to perform:"
+    echo "1) Run individual control"
+    echo "2) Audit all volumes in the account/region"
+    echo "3) Validate orphaned snapshots"
+
+    read -p "Enter choice (1-3): " choice
+
+    case $choice in
+        1)
+            echo "Select control to run:"
+            echo "1) Attached EBS volumes should have delete on termination enabled"
+            echo "2) Attached EBS volumes should have encryption enabled"
+            echo "3) EBS snapshots should be encrypted"
+            echo "4) EBS snapshots should not be publicly restorable"
+            echo "5) EBS encryption by default should be enabled"
+            echo "6) EBS volumes should be in a backup plan"
+            echo "7) EBS volume snapshots should exist"
+            echo "8) Ensure EBS volumes are attached to EC2 instances for proper usage and cost management."
+            echo "9) Ensure EBS volumes are encrypted at rest to protect data confidentiality."
+            echo "10) Ensure EBS volumes are part of a valid and automated backup plan."
+            echo "11) Ensure volume is attached to an EC2 instance"
+            echo "12) Ensure volume encryption at rest is enabled"
+            echo "13) Ensure snapshots are attached (via volume)"
 
     read -p "Enter control number (1-10): " control_choice
     
@@ -275,7 +428,16 @@ main() {
                 *)
             error "Invalid control selection" ;;
     esac
-
+    ;;
+2)
+    audit_all_volumes  # Call the function to audit all volumes in the account/region
+            ;;
+3)
+    validate_orphaned_snapshots  # Call the function to validate orphaned snapshots
+            ;;
+*)
+    error "Invalid selection. Please choose a valid option." ;;
+    esac
 }
 
 # Execute main function
