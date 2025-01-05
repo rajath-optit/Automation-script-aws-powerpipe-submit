@@ -276,4 +276,140 @@ Your script looks well-organized and incorporates the error handling, retry logi
 Before deploying the script in a live environment, I recommend testing it in a staging environment with a smaller set of volumes and snapshots. This will help verify the script's behavior and ensure it handles edge cases such as missing volume IDs, network failures, and unexpected API responses.
 
 ### Final Thoughts:
-Your script is functionally complete! Now, just ensure the actual execution environment is ready for it to run without issues. Would you like assistance with anything else, like how to test this script or specific troubleshooting tips?
+Your script is functionally complete! Now, just ensure the actual execution environment is ready for it to run without issues. 
+
+
+# for 2nd test file
+# AWS EBS Compliance Automation Tool
+
+## Overview
+This script automates compliance checks and auditing for AWS EBS (Elastic Block Store) volumes and snapshots. It provides various controls to ensure your EBS resources follow security best practices and compliance requirements.
+
+## Prerequisites
+- AWS CLI installed and configured with appropriate permissions
+- jq (JSON processor)
+- GNU parallel
+- Bash shell environment
+
+## Installation
+1. Download the script:
+```bash
+curl -O https://raw.githubusercontent.com/your-repo/ebs-compliance.sh
+chmod +x ebs-compliance.sh
+```
+
+2. Install dependencies:
+```bash
+# For Ubuntu/Debian
+sudo apt-get update
+sudo apt-get install awscli jq parallel
+
+# For Amazon Linux/RHEL
+sudo yum install awscli jq parallel
+```
+
+## Usage
+Run the script:
+```bash
+./ebs-compliance.sh
+```
+
+The tool provides three main options:
+
+1. Run individual control
+2. Audit all volumes in the account/region
+3. Validate orphaned snapshots
+
+### Example Outputs
+
+#### 1. Running Individual Control
+```bash
+AWS EBS Compliance Automation Tool
+======================================
+Select action to perform:
+1) Run individual control
+2) Audit all volumes in the account/region
+3) Validate orphaned snapshots
+
+Enter choice (1-3): 1
+
+Select control to run:
+1) Attached EBS volumes should have delete on termination enabled
+2) Attached EBS volumes should have encryption enabled
+[...]
+
+Enter control number (1-13): 2
+Enter EBS Volume ID: vol-1234567890abcdef0
+
+[2024-01-06 10:15:23] Running EBS Control 2: Checking Volume Encryption
+[2024-01-06 10:15:24] Volume vol-1234567890abcdef0 is not encrypted. Creating encrypted snapshot...
+[2024-01-06 10:15:45] Creating new encrypted volume from snapshot...
+[2024-01-06 10:16:15] Successfully created encrypted volume vol-0987654321fedcba0
+```
+
+#### 2. Auditing All Volumes
+```bash
+Enter choice (1-3): 2
+
+[2024-01-06 10:20:00] Starting comprehensive audit of all EBS volumes
+[2024-01-06 10:20:05] Completed audit for volume vol-1234567890abcdef0
+[2024-01-06 10:20:10] Completed audit for volume vol-0987654321fedcba0
+[2024-01-06 10:20:15] Audit complete. Results saved to compliance_report.json
+
+Example compliance_report.json:
+[
+  {
+    "volume_id": "vol-1234567890abcdef0",
+    "delete_on_termination": "true",
+    "encrypted": "true",
+    "backup_plan": "true",
+    "has_snapshots": "true",
+    "attached": "true"
+  },
+  {
+    "volume_id": "vol-0987654321fedcba0",
+    "delete_on_termination": "false",
+    "encrypted": "false",
+    "backup_plan": "false",
+    "has_snapshots": "false",
+    "attached": "true"
+  }
+]
+```
+
+#### 3. Validating Orphaned Snapshots
+```bash
+Enter choice (1-3): 3
+
+[2024-01-06 10:25:00] Validating orphaned snapshots
+[2024-01-06 10:25:10] Orphaned snapshots found:
+snap-1234567890abcdef0
+snap-0987654321fedcba0
+```
+
+## Controls Description
+
+1. **Delete on Termination**: Ensures EBS volumes are configured to be deleted when the attached instance is terminated
+2. **Volume Encryption**: Verifies and enables encryption for EBS volumes
+3. **Snapshot Encryption**: Checks if EBS snapshots are encrypted
+4. **Public Restoration**: Ensures snapshots are not publicly restorable
+5. **Default Encryption**: Verifies that EBS encryption by default is enabled
+6. **Backup Plans**: Checks if volumes are included in backup plans
+7. **Snapshot Existence**: Verifies that volumes have associated snapshots
+8. **Instance Attachment**: Ensures volumes are attached to EC2 instances
+9. **Encryption at Rest**: Verifies volume encryption at rest
+10. **Backup Protection**: Ensures volumes are protected by backup plans
+11. **Instance Attachment Check**: Verifies volume attachment to EC2 instances
+12. **Encryption Check**: Validates volume encryption at rest
+13. **Snapshot Attachment**: Ensures snapshots are associated with attached volumes
+
+## Logging
+The script maintains detailed logs in `ebs_compliance.log` and generates a JSON report in `compliance_report.json`.
+
+## Error Handling
+- Includes retry mechanism with exponential backoff
+- Comprehensive error reporting with colored output
+- Dependency validation before execution
+
+## Contributing
+Feel free to submit issues, fork the repository, and create pull requests for any improvements.
